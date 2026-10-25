@@ -193,8 +193,55 @@
     return r;
   }
 
+  // ---- Histórico central (gravado pelo coletor, lido pela página) ----
+  // Formato compacto de um lugar num lote: [idg, ts, lula, flavio, validos, secoes, secoesTot, eleitores].
+  const packSnap = (s) => [s.idg, s.ts, s.lula, s.flavio, s.validos, s.secoes, s.secoesTot, s.eleitores];
+  function unpackSnap(a) {
+    const [idg, ts, lula, flavio, validos, secoes, secoesTot, eleitores = 0] = a;
+    return {
+      idg, ts, lula, flavio, validos, secoes, secoesTot, eleitores, outros: 0,
+      p: secoesTot ? secoes / secoesTot : 0,
+      hora: `${ts.slice(8, 10)}/${ts.slice(5, 7)} ${ts.slice(11, 16)}`,
+    };
+  }
+
+  function historyEntry(br, ufs) {
+    return { idg: br.idg, ts: br.ts, hora: br.hora, br: packSnap(br),
+      ufs: Object.fromEntries(Object.entries(ufs).map(([uf, s]) => [uf, packSnap(s)])) };
+  }
+
+  // Uma entrada por versão nacional do TSE, sempre crescente: repetida ou antiga não entra.
+  function appendEntry(entries, e) {
+    const last = entries[entries.length - 1];
+    return last && e.idg <= last.idg ? entries : [...entries, e];
+  }
+
+  // O feed da noite refeito a partir do histórico: o que cada lugar ganhou entre duas entradas seguidas.
+  // A primeira entrada é só o ponto de partida.
+  function feedFromHistory(entries, max = 40) {
+    const out = [];
+    for (let i = 1; i < entries.length; i++) {
+      const prev = entries[i - 1].ufs, cur = entries[i].ufs;
+      const items = [];
+      for (const uf of Object.keys(cur)) {
+        const now = unpackSnap(cur[uf]);
+        const d = delta(prev[uf] ? unpackSnap(prev[uf]) : null, now);
+        if (d.validos > 0 || d.secoes > 0) items.push({ uf, ...d, dp: now.secoesTot ? d.secoes / now.secoesTot : 0 });
+      }
+      if (items.length) out.push(makeBatch(entries[i], items));
+    }
+    return out.reverse().slice(0, max);
+  }
+
+  // Versões de uma cidade: [idg, ts, lula, flavio, validos, secoes, secoesTot], só as aceitas.
+  function addCityVersion(versions, snap) {
+    const last = versions[versions.length - 1];
+    if (!acceptSnapshot(last ? unpackSnap(last) : null, snap).ok) return versions;
+    return [...versions, packSnap(snap).slice(0, 7)];
+  }
+
   const api = {
-    REGIONS, sumRegion,
+    REGIONS, sumRegion, packSnap, unpackSnap, historyEntry, appendEntry, feedFromHistory, addCityVersion,
     parseTse, priorLula, projectUf, simulate, acceptSnapshot, delta, addFeed, sumCheck, swing, withRetry,
     staleParts, totalIsStale, makeBatch, freshness, quietMinutes,
   };

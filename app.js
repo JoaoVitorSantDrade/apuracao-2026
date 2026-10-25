@@ -1,6 +1,9 @@
 // Busca no TSE, estado da página e renderização. A lógica de projeção e de lotes fica em model.js.
 (function () {
   const BASE = "https://resultados.tse.jus.br/oficial/ele2026";
+  // Histórico central, gravado pelo coletor (coletor/coletor.mjs) na branch "historico" do repositório.
+  // ?hist=<pasta> aponta para outra origem, como a pasta local do coletor em modo de teste.
+  const HIST = new URLSearchParams(location.search).get("hist") || "https://raw.githubusercontent.com/JoaoVitorSantDrade/apuracao-2026/historico";
   const ELE_2T = "6258";
   const ELE_1T = "6257";
   const CHECK_MS = 15000; // consulta só o arquivo do Brasil; os estados vêm quando a versão dele muda
@@ -26,7 +29,7 @@
     sel: "BR", view: "BR", selCity: null, mode: "live", ref: "t1", level: "uf",
     ok: null, lastOk: null, brIdg: null, lastCheck: null, nextAt: null, sinceChange: Date.now(), syncing: null,
     hist: [], feed: [], batches: [], flash: new Set(), flashNew: new Set(),
-    mun: null, geo: {}, city1: {}, city: {}, cityAt: {}, cityLoad: null, cityBusy: null,
+    mun: null, geo: {}, city1: {}, city: {}, cityHist: {}, cityAt: {}, cityLoad: null, cityBusy: null,
   };
   const KEY = SIM ? "apuracao26-sim" : "apuracao26-v2"; // v2: feed agrupado por lote
 
@@ -163,6 +166,56 @@
     const res = await Promise.allSettled(missing.map(async (uf) => [uf, await fetchUf(ELE_1T, uf)]));
     res.forEach((r) => { if (r.status === "fulfilled") S.t1[r.value[0]] = r.value[1]; });
     return res.every((r) => r.status === "fulfilled");
+  }
+
+  // A noite inteira para quem chega agora: gráfico, feed e votos por minuto refeitos a partir do histórico.
+  // Sem histórico publicado (ou com erro ao baixar), a página segue como antes, só com o ao vivo.
+  async function loadHistory() {
+    if (SIM) return;
+    let h;
+    try { h = await getJson(`${HIST}/historico.json`); } catch { return; }
+    const entries = h?.entries || [];
+    if (!entries.length) return;
+    S.feed = M.feedFromHistory(entries, 40);
+    S.batches = [];
+    S.hist = [];
+    entries.forEach((e, i) => {
+      const br = M.unpackSnap(e.br);
+      if (i) {
+        const d = M.delta(M.unpackSnap(entries[i - 1].br), br);
+        if (d.validos > 0) S.batches.push({ ts: br.ts, hora: br.hora, validos: d.validos, lula: d.lula, flavio: d.flavio });
+      }
+      if (!br.validos || S.hist[S.hist.length - 1]?.p === br.p) return;
+      const list = Object.entries(e.ufs).filter(([uf]) => S.t1[uf])
+        .map(([uf, a]) => M.projectUf(M.unpackSnap(a), S.t1[uf], lean22(uf) ?? 0.5));
+      if (!list.length) return;
+      const n = M.simulate(list, { n: 400, seed: 2026 });
+      S.hist.push({ p: br.p, s: br.lula / br.validos, m: n.mean, lo: n.lo, hi: n.hi, h: br.hora });
+    });
+    S.batches = S.batches.slice(-40);
+    // O estado atual parte da última entrada: o ao vivo segue dela, e o que o TSE publicou depois vira um lote no feed.
+    const last = entries[entries.length - 1];
+    S.live.BR = M.unpackSnap(last.br);
+    for (const [uf, a] of Object.entries(last.ufs)) S.live[uf] = M.unpackSnap(a);
+    compute();
+    render();
+  }
+
+  // Cidades publicadas pelo coletor: um download por estado. Devolve true se já estão na versão atual do estado.
+  async function loadCityHistory(uf) {
+    if (SIM) return false;
+    const [m2, m1] = await Promise.allSettled([getJson(`${HIST}/mun/${uf}.json`), getJson(`${HIST}/mun1t/${uf}.json`)]);
+    if (m1.status === "fulfilled") {
+      for (const [cd, [lula, flavio, validos, outros, secoesTot, eleitores]] of Object.entries(m1.value)) {
+        S.city1[uf][cd] = { lula, flavio, validos, outros, secoes: secoesTot, secoesTot, eleitores, p: 1 };
+      }
+      store.set(`apuracao26-c1-${uf}`, S.city1[uf]);
+    }
+    if (m2.status !== "fulfilled") return false;
+    const { hora, cidades } = m2.value;
+    S.cityHist[uf] = cidades;
+    for (const [cd, vs] of Object.entries(cidades)) if (vs.length) apply(S.city[uf], cd, M.unpackSnap(vs[vs.length - 1]));
+    return !!hora && hora === S.live[uf]?.hora;
   }
 
   // Aplica um lote de um lugar: aceita, calcula o que entrou de novo e devolve o delta (ou null).
@@ -325,8 +378,13 @@
       const list = mun[uf] || [];
       S.city1[uf] ??= store.get(`apuracao26-c1-${uf}`) || {};
       S.city[uf] ??= {};
+      // Primeiro o que o coletor publicou; o TSE só completa o que ainda não está em dia.
+      const fresh = await loadCityHistory(uf);
+      if (run !== cityRun) return;
+      paintMap();
       const missing1 = list.filter((m) => !S.city1[uf][m.cd]);
-      const total = missing1.length + list.length;
+      const list2 = fresh ? [] : list;
+      const total = missing1.length + list2.length;
       let done = 0;
       // Cada cidade é pintada assim que chega (um redesenho do mapa a cada 80 ms, no máximo).
       let paintQueued = false;
@@ -340,7 +398,7 @@
       progress();
       // O 2º turno vem primeiro: é o que está na tela.
       const r2 = SIM ? list.map((m) => simCity(uf, m.cd))
-        : await pool(list, CITY_CONC, each((m) => fetchUf(ELE_2T, uf, m.cd), (m, s) => apply(S.city[uf], m.cd, s)));
+        : await pool(list2, CITY_CONC, each((m) => fetchUf(ELE_2T, uf, m.cd), (m, s) => apply(S.city[uf], m.cd, s)));
       if (SIM) list.forEach((m, i) => { if (r2[i]) apply(S.city[uf], m.cd, r2[i]); });
       if (run !== cityRun) return;
       if (missing1.length) {
@@ -348,7 +406,7 @@
         store.set(`apuracao26-c1-${uf}`, S.city1[uf]);
       }
       S.cityAt[uf] = Date.now();
-      const failed = list.length - r2.filter(Boolean).length + missing1.length - missing1.filter((m) => S.city1[uf][m.cd]).length;
+      const failed = (SIM ? 0 : list2.length - r2.filter(Boolean).length) + missing1.length - missing1.filter((m) => S.city1[uf][m.cd]).length;
       S.cityLoad = failed ? { failed } : null;
       if (run === cityRun) render();
     } catch {
@@ -721,6 +779,19 @@
     $("d-rows").innerHTML = html || `<p class="caption">Carregando os dados do TSE…</p>`;
   }
 
+  // Lula entre os votos válidos a cada lote da cidade, no eixo das seções apuradas dela.
+  function cityTimeline(vs) {
+    const pts = vs.map(([, , l, f, , s, st]) => [st ? s / st : 0, l + f ? l / (l + f) : 0.5]);
+    const W = 100, H = 24;
+    const line = pts.map(([p, s]) => `${(p * W).toFixed(1)},${(H - s * H).toFixed(1)}`).join(" ");
+    const a = pts[0][1], b = pts[pts.length - 1][1];
+    return `<div class="row"><div class="lbl"><b>Ao longo da noite</b>${vs.length} lotes do TSE</div>` +
+      `<svg class="tl" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Lula entre os votos válidos a cada lote">` +
+      `<line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" stroke="var(--line-strong)" stroke-dasharray="2 2" vector-effect="non-scaling-stroke"/>` +
+      `<polyline points="${line}" fill="none" stroke="var(--shu)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>` +
+      `<div class="nums"><span class="l">Lula ${pct(a, 1)} → ${pct(b, 1)}</span></div></div>`;
+  }
+
   function renderCityDetail() {
     const uf = S.view, cd = S.selCity;
     const m = (S.mun?.[uf] || []).find((x) => x.cd === cd);
@@ -729,6 +800,8 @@
     $("d-sub").textContent = t1 ? `${int(t1.eleitores)} eleitores` : "";
     let html = "";
     if (live) html += row("Apurado agora", `${pct(live.p, 1)} das seções`, live.lula, 0, live.flavio, "Lula", "Flávio");
+    const vs = S.cityHist[uf]?.[cd];
+    if (vs && vs.length > 1) html += cityTimeline(vs);
     html += swingRow(citySwing(uf, cd), "vs 1º turno 2026", "pelo apurado até agora");
     if (t1) html += row("1º turno 2026", "cinza: outros", t1.lula, t1.outros, t1.flavio, "Lula", "Flávio");
     $("d-rows").innerHTML = html || `<p class="caption">Carregando a cidade…</p>`;
@@ -835,6 +908,7 @@
       $("chip").textContent = "TSE fora do ar · tentando de novo";
       await new Promise((r) => setTimeout(r, 10000));
     }
+    await loadHistory();
     await tick(); // cada ciclo agenda o seguinte, então nunca se sobrepõem
     setInterval(renderFresh, 1000);
   }

@@ -17,6 +17,24 @@ git push
 
 Para trabalhar em outro computador, clone primeiro: `gh repo clone JoaoVitorSantDrade/apuracao-2026`.
 
+## Histórico da noite (coletor)
+
+O coletor roda no seu computador durante a apuração e publica o histórico na branch `historico` do GitHub. Com ele,
+quem abre o painel no meio da noite vê a noite inteira (gráfico, feed e votos por minuto), e as cidades de um estado
+abrem com um único download do GitHub em vez de centenas de pedidos ao TSE.
+
+```bash
+node coletor/coletor.mjs
+```
+
+- Deixe o terminal aberto e o computador acordado. Ctrl+C publica o que falta e encerra; ele também para sozinho
+  quando a apuração chega a 100%.
+- Se parar no meio, é só rodar de novo: ele retoma dos arquivos publicados, sem repetir lotes.
+- Na primeira vez ele baixa o 1º turno de todas as cidades (cerca de 5 minutos).
+- A branch `historico` tem sempre um único commit, refeito a cada envio; não republica o site.
+- Para testar sem publicar: `node coletor/coletor.mjs --sem-publicar` grava em `.historico-teste/`, e
+  `http://localhost:8765/?hist=.historico-teste` faz a página ler dessa pasta.
+
 ## Abrir no seu computador
 
 ```bash
@@ -44,4 +62,5 @@ quantos arquivos se baixa por vez). Depois disso o 1º turno fica guardado no na
 - `app.js`: busca no TSE (Brasil a cada 15 s; estados e cidades quando mudam), feed, mapa, gráficos e tabela.
 - `model.js`: projeção, aceitação de lotes, variação e novas tentativas (funções puras). Testes: `node --test test/model.test.js`.
 - `data.js`: resultados de 2018/2022 por UF e o contorno dos estados e das regiões (o das cidades vem do IBGE na hora).
+- `coletor/coletor.mjs`: o coletor do histórico. Testes: `node --test test/coletor.test.mjs`.
 - `docs/`: design e plano.

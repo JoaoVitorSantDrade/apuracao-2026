@@ -249,3 +249,54 @@ test("sumRegion adds up the states it has and recomputes the counted share", () 
   assert.deepEqual(r, { lula: 16, flavio: 24, validos: 40, outros: 0, secoes: 10, secoesTot: 40, eleitores: 150, p: 0.25 });
   assert.equal(M.sumRegion(snaps, ["BA"]), null);
 });
+
+// ---- Histórico central ----
+const sn = (idg, ts, lula, flavio, secoes, o = {}) =>
+  ({ idg, ts, hora: `${ts.slice(8, 10)}/${ts.slice(5, 7)} ${ts.slice(11, 16)}`, lula, flavio, validos: lula + flavio,
+    secoes, secoesTot: 100, eleitores: 1000, ...o });
+
+test("packSnap and unpackSnap round-trip what the panel uses", () => {
+  const s = sn(7, "2026-10-25T19:05:00", 30, 20, 10);
+  const u = M.unpackSnap(M.packSnap(s));
+  assert.deepEqual([u.idg, u.ts, u.hora, u.lula, u.flavio, u.validos, u.secoes, u.secoesTot, u.eleitores, u.p],
+    [7, "2026-10-25T19:05:00", "25/10 19:05", 30, 20, 50, 10, 100, 1000, 0.1]);
+});
+
+test("historyEntry packs the national total and every state of one batch", () => {
+  const e = M.historyEntry(sn(9, "2026-10-25T19:10:00", 50, 40, 20), { SP: sn(3, "2026-10-25T19:09:00", 20, 30, 8) });
+  assert.equal(e.idg, 9);
+  assert.equal(e.hora, "25/10 19:10");
+  assert.deepEqual(e.br, [9, "2026-10-25T19:10:00", 50, 40, 90, 20, 100, 1000]);
+  assert.deepEqual(Object.keys(e.ufs), ["SP"]);
+});
+
+test("appendEntry only adds a newer national version", () => {
+  const a = M.appendEntry([], { idg: 5 });
+  const b = M.appendEntry(a, { idg: 6 });
+  assert.equal(b.length, 2);
+  assert.equal(M.appendEntry(b, { idg: 6 }), b);
+  assert.equal(M.appendEntry(b, { idg: 4 }), b);
+});
+
+test("feedFromHistory rebuilds one batch per entry after the first, newest first", () => {
+  const e1 = M.historyEntry(sn(1, "2026-10-25T19:00:00", 10, 10, 2), { SP: sn(1, "2026-10-25T19:00:00", 10, 10, 2) });
+  const e2 = M.historyEntry(sn(2, "2026-10-25T19:02:00", 40, 20, 6), {
+    SP: sn(2, "2026-10-25T19:02:00", 25, 15, 4), BA: sn(2, "2026-10-25T19:02:00", 15, 5, 2),
+  });
+  const e3 = M.historyEntry(sn(3, "2026-10-25T19:03:00", 40, 20, 6), {
+    SP: sn(2, "2026-10-25T19:02:00", 25, 15, 4), BA: sn(2, "2026-10-25T19:02:00", 15, 5, 2),
+  });
+  const f = M.feedFromHistory([e1, e2, e3]);
+  assert.equal(f.length, 1); // e1 é o ponto de partida; e3 não trouxe voto novo
+  assert.equal(f[0].key, "BR:2");
+  assert.deepEqual(f[0].items.map((i) => [i.uf, i.lula, i.flavio]), [["SP", 15, 5], ["BA", 15, 5]]);
+});
+
+test("addCityVersion keeps each accepted city version once", () => {
+  let v = M.addCityVersion([], sn(1, "2026-10-25T19:00:00", 3, 2, 1));
+  v = M.addCityVersion(v, sn(1, "2026-10-25T19:00:00", 3, 2, 1)); // repetido
+  v = M.addCityVersion(v, sn(2, "2026-10-25T19:05:00", 6, 4, 2));
+  v = M.addCityVersion(v, sn(3, "2026-10-25T19:06:00", 5, 4, 2)); // contagem menor
+  assert.deepEqual(v.map((x) => x[0]), [1, 2]);
+  assert.deepEqual(v[1], [2, "2026-10-25T19:05:00", 6, 4, 10, 2, 100]);
+});
