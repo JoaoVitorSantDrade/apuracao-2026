@@ -171,3 +171,63 @@ test("withRetry gives up on errors other than 429 and after the last try", async
   await assert.rejects(M.withRetry(busy, { tries: 3, sleep: async () => {} }), /429/);
   assert.equal(calls, 3);
 });
+
+// ---- Sincronização: lote consistente, feed por lote e atualidade ----
+const part = (ts, lula, flavio) => ({ ts, lula, flavio, validos: lula + flavio });
+
+test("staleParts is empty when the parts already add up to the total", () => {
+  const total = part("2026-10-25T19:10:00", 30, 20);
+  const parts = { SP: part("2026-10-25T19:10:00", 10, 10), BA: part("2026-10-25T19:02:00", 20, 10) };
+  assert.deepEqual(M.staleParts(total, parts), []);
+});
+
+test("staleParts names the parts older than the total when the sum does not match", () => {
+  const total = part("2026-10-25T19:10:00", 40, 25);
+  const parts = { SP: part("2026-10-25T19:10:00", 10, 10), ZZ: part("2026-10-24T20:11:36", 0, 0), BA: part("2026-10-25T19:02:00", 20, 10) };
+  assert.deepEqual(M.staleParts(total, parts).sort(), ["BA", "ZZ"]);
+});
+
+test("makeBatch sums one TSE batch and lists its places, biggest first", () => {
+  const b = M.makeBatch({ idg: 7, hora: "25/10 19:12" }, [
+    { uf: "SE", lula: 3, flavio: 1, validos: 4, secoes: 1, dp: 0.01 },
+    { uf: "SP", lula: 40, flavio: 60, validos: 100, secoes: 9, dp: 0.02 },
+  ]);
+  assert.equal(b.key, "BR:7");
+  assert.equal(b.hora, "25/10 19:12");
+  assert.deepEqual([b.lula, b.flavio, b.validos, b.n], [43, 61, 104, 2]);
+  assert.deepEqual(b.items.map((i) => i.uf), ["SP", "SE"]);
+});
+
+test("freshness says when the page last checked the TSE and when it checks again", () => {
+  const now = 1_000_000;
+  assert.equal(M.freshness(now, now - 3_000, now + 12_000), "checado há 3 s · próxima checagem em 12 s");
+  assert.equal(M.freshness(now, now - 3_000, now + 2_400), "checado há 3 s · próxima checagem em 3 s");
+  assert.equal(M.freshness(now, now - 3_000, null), "checando agora");
+  assert.equal(M.freshness(now, null, null), "checando agora");
+});
+
+test("quietMinutes reports a TSE pause only after 5 minutes without a new batch", () => {
+  const now = 10_000_000;
+  assert.equal(M.quietMinutes(now, now - 60_000), null);
+  assert.equal(M.quietMinutes(now, now - 6 * 60_000), 6);
+  assert.equal(M.quietMinutes(now, null), null);
+});
+
+test("totalIsStale when a part is newer than the total and the sum does not match", () => {
+  const total = part("2026-10-25T17:06:31", 30, 20);
+  assert.equal(M.totalIsStale(total, { PA: part("2026-10-25T17:07:00", 35, 20) }), true);
+  assert.equal(M.totalIsStale(total, { PA: part("2026-10-25T17:07:00", 30, 20) }), false);
+  assert.equal(M.totalIsStale(total, { PA: part("2026-10-25T17:00:00", 35, 20) }), false);
+});
+
+test("staleParts leaves the parts alone when the total is the stale one (TSE, 25/10 17:06)", () => {
+  // Pará já tinha um lote das 17:07 e o total do Brasil ainda era das 17:06; SP e exterior estavam vazios e antigos.
+  const total = part("2026-10-25T17:06:31", 30, 20);
+  const parts = {
+    PA: part("2026-10-25T17:07:00", 35, 20),
+    SP: part("2026-10-13T17:50:07", 0, 0),
+    ZZ: part("2026-10-24T20:11:36", 0, 0),
+  };
+  assert.deepEqual(M.staleParts(total, parts), []);
+  assert.equal(M.totalIsStale(total, parts), true);
+});

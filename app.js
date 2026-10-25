@@ -21,11 +21,11 @@
   const S = {
     t1: {}, live: {}, proj: {}, nat: null,
     sel: "BR", view: "BR", selCity: null, mode: "live", ref: "t1",
-    ok: false, lastOk: null, brIdg: null,
-    hist: [], feed: [], batches: [], flash: new Set(),
+    ok: null, lastOk: null, brIdg: null, lastCheck: null, nextAt: null, sinceChange: Date.now(), syncing: null,
+    hist: [], feed: [], batches: [], flash: new Set(), flashNew: new Set(),
     mun: null, geo: {}, city1: {}, city: {}, cityAt: {}, cityLoad: null, cityBusy: null,
   };
-  const KEY = SIM ? "apuracao26-sim" : "apuracao26";
+  const KEY = SIM ? "apuracao26-sim" : "apuracao26-v2"; // v2: feed agrupado por lote
 
   const $ = (id) => document.getElementById(id);
   const pct = (x, d = 2) => x == null || !isFinite(x) ? "–"
@@ -88,8 +88,8 @@
     ? M.swing(S.live.BR, S.nat ? { share: S.nat.mean } : null, refShare("BR"))
     : M.swing(S.live[uf], S.proj[uf], refShare(uf));
 
-  // ---- Simulação (#simulacao): apuração fictícia a partir do 1º turno, com cópias repetidas e
-  //      antigas de propósito, para ver a proteção contra duplicados funcionando ----
+  // ---- Simulação (#simulacao): apuração fictícia a partir do 1º turno. Imita o TSE de verdade: o total do
+  //      Brasil sai sempre em dia, mas cada estado pode vir repetido ou numa versão antiga da CDN ----
   const sim = { step: 0, idg: 1000, speed: {}, bias: {}, natBias: (Math.random() - 0.5) * 0.04, past: {} };
   function simSnap(uf) {
     const t = S.t1[uf];
@@ -105,14 +105,21 @@
     return { lula, flavio: validos - lula, validos, outros: 0, secoes, secoesTot: t.secoesTot, p: secoes / t.secoesTot,
       eleitores: t.eleitores, comparecimento: 0, hora: nowHora(d), idg: sim.idg, ts: isoLocal(d) };
   }
-  function simFetchUf(uf) {
-    const past = (sim.past[uf] ??= []);
+  // Gera a versão nova de todos os lugares e devolve o total do Brasil, que é a soma deles.
+  function simPublish() {
+    sim.step += 0.02; sim.idg += 1;
+    const br = { lula: 0, flavio: 0, validos: 0, secoes: 0, secoesTot: 0, eleitores: 0 };
+    UFS.forEach((uf) => { const s = simSnap(uf); (sim.past[uf] ??= []).push(s); for (const k in br) br[k] += s[k]; });
+    const d = new Date();
+    return { ...br, outros: 0, p: br.secoes / br.secoesTot, hora: nowHora(d), idg: sim.idg, ts: isoLocal(d) };
+  }
+  // O que a "CDN" entrega para um estado: quase sempre a versão nova, às vezes uma anterior.
+  function simServe(uf) {
+    const past = sim.past[uf];
     const r = Math.random();
-    if (past.length > 1 && r < 0.1) return past[past.length - 2]; // cópia antiga da CDN
-    if (past.length > 0 && r < 0.25) return past[past.length - 1]; // mesma versão de novo
-    const s = simSnap(uf);
-    past.push(s);
-    return s;
+    if (past.length > 2 && r < 0.08) return past[past.length - 3];
+    if (past.length > 1 && r < 0.25) return past[past.length - 2];
+    return past[past.length - 1];
   }
   const z2 = (n) => String(n).padStart(2, "0");
   const nowHora = (d = new Date()) => `${z2(d.getDate())}/${z2(d.getMonth() + 1)} ${z2(d.getHours())}:${z2(d.getMinutes())}`;
@@ -135,57 +142,104 @@
     return M.delta(prev, snap);
   }
 
+  const SYNC_TRIES = 3;
+  const SYNC_WAIT_MS = SIM ? 1000 : 5000;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const getTotal = () => SIM ? Promise.resolve(sim.lastBr) : fetchUf(ELE_2T, "BR");
+  const getPart = (uf) => SIM ? Promise.resolve(simServe(uf)) : fetchUf(ELE_2T, uf);
+
+  // Baixa as partes pedidas e entrega cada uma assim que chega.
+  async function fetchParts(list, onSnap) {
+    await Promise.allSettled(list.map(async (uf) => onSnap(uf, await getPart(uf))));
+  }
+
+  // Redesenho agrupado: muitos arquivos chegando em sequência viram um redesenho a cada 80 ms.
+  // Temporizador, não requestAnimationFrame: este para quando a aba fica em segundo plano.
+  const DRAW_MS = 80;
+  let drawQueued = false;
+  function scheduleRender() {
+    if (drawQueued) return;
+    drawQueued = true;
+    setTimeout(() => { drawQueued = false; compute(); render(); }, DRAW_MS);
+  }
+
+  function applyTotal(br) {
+    const dBr = apply(S.live, "BR", br);
+    if (dBr) S.sinceChange = Date.now();
+    if (dBr && dBr.validos > 0) {
+      S.batches = [...S.batches, { ts: br.ts, hora: br.hora, validos: dBr.validos, lula: dBr.lula, flavio: dBr.flavio }].slice(-40);
+    }
+  }
+
   // Nunca duas consultas ao mesmo tempo: se o TSE estiver lento, o ciclo seguinte espera em vez de empilhar pedidos.
-  let ticking = false;
+  let ticking = false, timer = null;
   async function tick() {
     if (ticking) return;
     ticking = true;
+    clearTimeout(timer);
+    S.nextAt = null;
+    renderFresh();
     try {
-      if (SIM) {
-        sim.step += 0.02; sim.idg += 1;
-        await ingest(UFS.map((uf) => [uf, simFetchUf(uf)]), null);
-      } else {
-        const br = await fetchUf(ELE_2T, "BR");
-        if (br.idg !== S.brIdg) {
-          const res = await Promise.allSettled(UFS.map(async (uf) => [uf, await fetchUf(ELE_2T, uf)]));
-          await ingest(res.filter((r) => r.status === "fulfilled").map((r) => r.value), br);
-          S.ok = res.every((r) => r.status === "fulfilled");
-          if (S.ok) S.brIdg = br.idg; // com falha, tenta de novo no próximo ciclo
-        } else S.ok = true;
-      }
+      if (SIM) sim.lastBr = simPublish();
+      let br = await getTotal();
+      S.lastCheck = Date.now();
+      if (br.idg !== S.brIdg) {
+        // A tela atualiza conforme os arquivos chegam: o total do Brasil na hora, cada estado assim que
+        // baixa (sempre pela aceitação de versão, então nada conta duas vezes). Os arquivos de um lote saem
+        // do TSE em momentos diferentes, por isso o lote só fecha no feed depois de insistir por alguns
+        // segundos nos atrasados (estados mais velhos que o total, ou o próprio total).
+        const first = !S.live.BR; // a primeira carga é o ponto de partida, não um lote
+        const items = {};
+        S.flash.clear();
+        applyTotal(br);
+        scheduleRender();
+        const take = (uf, snap) => {
+          const d = apply(S.live, uf, snap);
+          if (d && (d.validos > 0 || d.secoes > 0)) {
+            S.flash.add(uf);
+            S.flashNew.add(uf);
+            const a = items[uf] || { uf, lula: 0, flavio: 0, validos: 0, secoes: 0 };
+            items[uf] = { uf, lula: a.lula + d.lula, flavio: a.flavio + d.flavio, validos: a.validos + d.validos,
+              secoes: a.secoes + d.secoes, dp: (a.secoes + d.secoes) / snap.secoesTot };
+          }
+          scheduleRender();
+        };
+        await fetchParts(UFS, take);
+        for (let i = 1; i <= SYNC_TRIES; i++) {
+          const parts = {};
+          UFS.forEach((uf) => { if (S.live[uf]) parts[uf] = S.live[uf]; });
+          const missing = UFS.filter((uf) => !parts[uf]);
+          const stale = M.staleParts(br, parts);
+          const totalOld = M.totalIsStale(br, parts);
+          if (!missing.length && !stale.length && !totalOld) break;
+          S.syncing = i;
+          renderSeal();
+          await sleep(SYNC_WAIT_MS);
+          await fetchParts([...new Set([...missing, ...stale])], take);
+          if (totalOld) {
+            const nb = await getTotal();
+            if (nb.idg > br.idg) { br = nb; applyTotal(nb); scheduleRender(); }
+          }
+        }
+        S.syncing = null;
+        const list = Object.values(items);
+        if (!first && list.length) S.feed = M.addFeed(S.feed, M.makeBatch(br, list), 40);
+        store.set(KEY, { hist: S.hist, feed: S.feed, batches: S.batches });
+        S.ok = UFS.every((uf) => S.live[uf]);
+        if (S.ok) S.brIdg = br.idg; // faltou algum estado: o próximo ciclo baixa tudo de novo
+        if (S.view !== "BR" && S.flash.has(S.view)) loadCities(S.view);
+      } else S.ok = true;
       S.lastOk = new Date();
     } catch {
       S.ok = false;
     } finally {
       ticking = false;
+      S.syncing = null;
     }
-    render();
-  }
-
-  async function ingest(pairs, brSnap) {
-    S.flash.clear();
-    const entries = [];
-    for (const [uf, snap] of pairs) {
-      const d = apply(S.live, uf, snap);
-      if (d && (d.validos > 0 || d.secoes > 0)) {
-        S.flash.add(uf);
-        entries.push({ key: `${uf}:${snap.idg}`, uf, hora: snap.hora, ...d, dp: d.secoes / snap.secoesTot });
-      }
-    }
-    if (SIM) {
-      const br = { lula: 0, flavio: 0, validos: 0, secoes: 0, secoesTot: 0, eleitores: 0 };
-      UFS.forEach((uf) => { const l = S.live[uf]; if (l) for (const k in br) br[k] += l[k]; });
-      const d = new Date();
-      brSnap = { ...br, outros: 0, p: br.secoes / br.secoesTot, hora: nowHora(d), idg: sim.idg, ts: isoLocal(d) };
-    }
-    const dBr = apply(S.live, "BR", brSnap);
-    if (dBr && dBr.validos > 0) {
-      S.batches = [...S.batches, { ts: brSnap.ts, hora: brSnap.hora, validos: dBr.validos, lula: dBr.lula, flavio: dBr.flavio }].slice(-40);
-    }
-    entries.sort((a, b) => a.validos - b.validos).forEach((e) => { S.feed = M.addFeed(S.feed, e, 120); });
+    S.nextAt = Date.now() + (SIM ? 4000 : CHECK_MS);
+    timer = setTimeout(tick, S.nextAt - Date.now());
     compute();
-    store.set(KEY, { hist: S.hist, feed: S.feed, batches: S.batches });
-    if (S.view !== "BR" && S.flash.has(S.view)) loadCities(S.view);
+    render();
   }
 
   function compute() {
@@ -238,21 +292,29 @@
       if (run === cityRun && S.view === uf) drawCityMap(uf, geo);
       const list = mun[uf] || [];
       S.city1[uf] ??= store.get(`apuracao26-c1-${uf}`) || {};
+      S.city[uf] ??= {};
       const missing1 = list.filter((m) => !S.city1[uf][m.cd]);
       const total = missing1.length + list.length;
       let done = 0;
-      const progress = () => { S.cityLoad = { done, total }; if (run === cityRun) renderCityStatus(); };
-      const counted = (fn) => async (m) => { const s = await fn(m); done++; if (done % 10 === 0) progress(); return s; };
+      // Cada cidade é pintada assim que chega (um redesenho do mapa a cada 80 ms, no máximo).
+      let paintQueued = false;
+      const paintSoon = () => {
+        if (paintQueued || run !== cityRun) return;
+        paintQueued = true;
+        setTimeout(() => { paintQueued = false; if (run === cityRun) { paintMap(); renderCityStatus(); } }, DRAW_MS);
+      };
+      const progress = () => { S.cityLoad = { done, total }; paintSoon(); };
+      const each = (fn, keep) => async (m) => { const s = await fn(m); if (s) keep(m, s); done++; progress(); return s; };
       progress();
+      // O 2º turno vem primeiro: é o que está na tela.
+      const r2 = SIM ? list.map((m) => simCity(uf, m.cd))
+        : await pool(list, CITY_CONC, each((m) => fetchUf(ELE_2T, uf, m.cd), (m, s) => apply(S.city[uf], m.cd, s)));
+      if (SIM) list.forEach((m, i) => { if (r2[i]) apply(S.city[uf], m.cd, r2[i]); });
+      if (run !== cityRun) return;
       if (missing1.length) {
-        const r1 = await pool(missing1, CITY_CONC, counted((m) => fetchUf(ELE_1T, uf, m.cd)));
-        missing1.forEach((m, i) => { if (r1[i]) S.city1[uf][m.cd] = r1[i]; });
+        await pool(missing1, CITY_CONC, each((m) => fetchUf(ELE_1T, uf, m.cd), (m, s) => { S.city1[uf][m.cd] = s; }));
         store.set(`apuracao26-c1-${uf}`, S.city1[uf]);
       }
-      if (run !== cityRun) return;
-      const r2 = SIM ? list.map((m) => simCity(uf, m.cd)) : await pool(list, CITY_CONC, counted((m) => fetchUf(ELE_2T, uf, m.cd)));
-      S.city[uf] ??= {};
-      list.forEach((m, i) => { if (r2[i]) apply(S.city[uf], m.cd, r2[i]); });
       S.cityAt[uf] = Date.now();
       const failed = list.length - r2.filter(Boolean).length + missing1.length - missing1.filter((m) => S.city1[uf][m.cd]).length;
       S.cityLoad = failed ? { failed } : null;
@@ -325,14 +387,14 @@
   }
 
   const fillShare = (s) => {
-    if (s == null) return "var(--surface-raised)";
+    if (s == null) return "var(--map-empty)";
     const k = Math.min(1, Math.abs(s - 0.5) * 10);
-    return `color-mix(in oklab, ${s >= 0.5 ? "var(--shu)" : "var(--ai)"} ${Math.round(35 + 65 * k)}%, var(--surface-raised))`;
+    return `color-mix(in oklab, ${s >= 0.5 ? "var(--shu)" : "var(--ai)"} ${Math.round(35 + 65 * k)}%, var(--map-empty))`;
   };
   const fillSwing = (sw) => {
-    if (sw == null) return "var(--surface-raised)";
+    if (sw == null) return "var(--map-empty)";
     const k = Math.min(1, Math.abs(sw) / 10);
-    return `color-mix(in oklab, ${sw >= 0 ? "var(--shu)" : "var(--ai)"} ${Math.round(15 + 85 * k)}%, var(--surface-raised))`;
+    return `color-mix(in oklab, ${sw >= 0 ? "var(--shu)" : "var(--ai)"} ${Math.round(15 + 85 * k)}%, var(--map-empty))`;
   };
 
   function ufShare(uf, mode) {
@@ -366,7 +428,7 @@
         const uf = p.dataset.uf;
         p.style.fill = S.mode === "swing" ? fillSwing(swingUf(uf)) : fillShare(ufShare(uf, S.mode));
         p.classList.toggle("sel", uf === S.sel);
-        if (S.flash.has(uf) && !REDUCED) { p.classList.remove("flash"); void p.getBBox(); p.classList.add("flash"); }
+        if (S.flashNew.has(uf) && !REDUCED) { p.classList.remove("flash"); void p.getBBox(); p.classList.add("flash"); }
       });
     }
   }
@@ -433,12 +495,15 @@
     }
     const chip = $("chip");
     if (SIM) { chip.className = "chip sim"; chip.textContent = "simulação"; }
+    else if (!S.lastOk && S.ok === null) { chip.className = "chip stale"; chip.textContent = "carregando"; }
     else if (!S.lastOk) { chip.className = "chip err"; chip.textContent = "sem conexão com o TSE"; }
     else if (!S.ok) {
       chip.className = "chip stale";
       chip.textContent = `dados de ${S.lastOk.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
     } else if (br && br.p >= 1) { chip.className = "chip live"; chip.textContent = "totalizado"; }
-    else if (br && br.p > 0) { chip.className = "chip live"; chip.textContent = "ao vivo"; }
+    else if (br && br.p > 0 && M.quietMinutes(Date.now(), S.sinceChange)) {
+      chip.className = "chip stale"; chip.textContent = `TSE sem lote novo há ${M.quietMinutes(Date.now(), S.sinceChange)} min`;
+    } else if (br && br.p > 0) { chip.className = "chip live"; chip.textContent = "ao vivo"; }
     else { chip.className = "chip stale"; chip.textContent = "aguardando a apuração"; }
 
     renderMapChrome();
@@ -449,6 +514,7 @@
     renderChart();
     renderDetail();
     renderTable();
+    S.flashNew.clear(); // cada chegada pisca uma vez, mesmo com vários redesenhos seguidos
   }
 
   function renderFeed() {
@@ -467,31 +533,42 @@
         `<i class="l" style="height:${(lw * 100).toFixed(1)}%"></i></span>`;
     }).join("");
 
-    // Conferência: soma das UFs + exterior contra o total do Brasil publicado pelo TSE.
-    const br = S.live.BR;
-    const parts = UFS.map((u) => S.live[u]).filter(Boolean);
-    const seal = $("seal");
-    if (!br || parts.length < UFS.length) { seal.className = "chip stale"; seal.textContent = "conferindo"; }
-    else {
-      const c = M.sumCheck(br, parts);
-      const sync = parts.every((p) => p.ts === br.ts) || SIM;
-      if (c.ok) { seal.className = "chip ok"; seal.textContent = "soma dos estados confere"; }
-      else if (!sync) { seal.className = "chip stale"; seal.textContent = `arquivos sincronizando · ${int(c.diff)} votos de diferença`; }
-      else { seal.className = "chip err"; seal.textContent = `soma não confere · ${int(c.diff)} votos`; }
-    }
+    renderSeal();
+    renderFresh();
 
     const list = $("feed");
     const have = new Set([...list.children].map((li) => li.dataset.key));
     if (!S.feed.length) { list.innerHTML = `<li class="empty caption">Cada lote que o TSE publicar aparece aqui, com o que entrou de novo em cada estado.</li>`; return; }
-    list.innerHTML = S.feed.slice(0, 60).map((e) => {
-      const t = e.lula + e.flavio, lw = t ? e.lula / t : 0;
-      return `<li data-key="${e.key}" class="${have.size && !have.has(e.key) ? "new" : ""}">` +
-        `<span class="mono t">${e.hora.slice(6)}</span><b>${e.uf}</b>` +
-        `<span class="mono v">+${int(e.validos)}</span>` +
-        `<span class="mini"><i class="l" style="width:${(lw * 100).toFixed(1)}%"></i></span>` +
-        `<span class="mono s"><span class="l">${pct(lw, 1)}</span> · <span class="f">${pct(t ? 1 - lw : 0, 1)}</span></span>` +
-        `<span class="mono dp">+${(e.dp * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} pp seções</span></li>`;
+    const split = (l, f) => {
+      const t = l + f, lw = t ? l / t : 0;
+      return `<span class="mini"><i class="l" style="width:${(lw * 100).toFixed(1)}%"></i></span>` +
+        `<span class="mono s"><span class="l">${pct(lw, 1)}</span> · <span class="f">${pct(t ? 1 - lw : 0, 1)}</span></span>`;
+    };
+    list.innerHTML = S.feed.slice(0, 20).map((b) => {
+      const ufs = b.items.filter((i) => i.uf !== "ZZ").length, zz = b.items.some((i) => i.uf === "ZZ");
+      const where = [ufs ? `${ufs} ${ufs === 1 ? "estado" : "estados"}` : "", zz ? "exterior" : ""].filter(Boolean).join(" + ");
+      return `<li data-key="${b.key}" class="batch${have.size && !have.has(b.key) ? " new" : ""}">` +
+        `<div class="bh"><span class="mono t">${b.hora.slice(6)}</span><b class="mono">+${int(b.validos)}</b>` +
+        `<span class="caption">${where}</span>${split(b.lula, b.flavio)}</div>` +
+        `<ul>${b.items.map((e) => `<li><b>${e.uf}</b><span class="mono v">+${int(e.validos)}</span>${split(e.lula, e.flavio)}` +
+          `<span class="mono dp">+${(e.dp * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} pp seções</span></li>`).join("")}</ul></li>`;
     }).join("");
+  }
+
+  // Conferência: soma das UFs + exterior contra o total do Brasil publicado pelo TSE.
+  function renderSeal() {
+    const seal = $("seal");
+    const br = S.live.BR;
+    const parts = UFS.map((u) => S.live[u]).filter(Boolean);
+    if (S.syncing) { seal.className = "chip stale"; seal.textContent = `sincronizando estados · tentativa ${S.syncing} de ${SYNC_TRIES}`; return; }
+    if (!br || parts.length < UFS.length) { seal.className = "chip stale"; seal.textContent = "conferindo"; return; }
+    const c = M.sumCheck(br, parts);
+    if (c.ok) { seal.className = "chip ok"; seal.textContent = "soma dos estados confere"; }
+    else { seal.className = "chip stale"; seal.textContent = `TSE ainda não publicou tudo · ${int(c.diff)} votos de diferença`; }
+  }
+
+  function renderFresh() {
+    $("fresh").textContent = M.freshness(Date.now(), S.lastCheck, S.nextAt);
   }
 
   function renderProj() {
@@ -622,7 +699,7 @@
     $("tbody").innerHTML = order.map((uf) => {
       const l = S.live[uf];
       const tot = l ? l.lula + l.flavio : 0;
-      return `<tr data-uf="${uf}" class="${uf === S.sel ? "sel" : ""}${S.flash.has(uf) && !REDUCED ? " upd" : ""}">` +
+      return `<tr data-uf="${uf}" class="${uf === S.sel ? "sel" : ""}${S.flashNew.has(uf) && !REDUCED ? " upd" : ""}">` +
         `<td><b>${uf}</b> <span class="caption">${NAMES[uf]}</span></td>` +
         `<td class="r mono">${l ? pct(l.p, 1) : "–"}</td>` +
         `<td>${l ? sbar(l.lula, 0, l.flavio) : ""}</td>` +
@@ -707,8 +784,8 @@
       $("chip").textContent = "TSE fora do ar · tentando de novo";
       await new Promise((r) => setTimeout(r, 10000));
     }
-    await tick();
-    setInterval(tick, SIM ? 4000 : CHECK_MS);
+    await tick(); // cada ciclo agenda o seguinte, então nunca se sobrepõem
+    setInterval(renderFresh, 1000);
   }
   start();
 })();

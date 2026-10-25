@@ -134,7 +134,50 @@
     }
   }
 
-  const api = { parseTse, priorLula, projectUf, simulate, acceptSnapshot, delta, addFeed, sumCheck, swing, withRetry };
+  // O TSE não publica o total e as partes ao mesmo tempo, e a CDN guarda cada arquivo por conta própria.
+  // Se a soma não bate, as partes com horário mais antigo que o total são as que vale baixar de novo.
+  // Quando é o total que está atrasado, as partes mais antigas que ele são só lugares que não mudaram.
+  function staleParts(total, parts) {
+    if (sumCheck(total, Object.values(parts)).ok || totalIsStale(total, parts)) return [];
+    return Object.keys(parts).filter((k) => parts[k].ts < total.ts);
+  }
+
+  // Um lote nacional do TSE e o que entrou em cada lugar nele.
+  function makeBatch(br, items) {
+    const sum = (k) => items.reduce((s, i) => s + i[k], 0);
+    return {
+      key: `BR:${br.idg}`, hora: br.hora,
+      lula: sum("lula"), flavio: sum("flavio"), validos: sum("validos"), n: items.length,
+      items: items.slice().sort((a, b) => b.validos - a.validos),
+    };
+  }
+
+  // O inverso: alguma parte já é mais nova que o total, então é o arquivo do Brasil que está atrasado.
+  function totalIsStale(total, parts) {
+    if (sumCheck(total, Object.values(parts)).ok) return false;
+    return Object.values(parts).some((p) => p.ts > total.ts);
+  }
+
+  // Usa só o relógio de quem está vendo: o horário do dado já vem do TSE, e assim o fuso não importa.
+  function freshness(now, lastCheck, nextAt) {
+    if (lastCheck == null || nextAt == null) return "checando agora";
+    const ago = Math.max(0, Math.round((now - lastCheck) / 1000));
+    // A contagem regressiva arredonda para cima: nunca mostra "0 s" antes de a checagem sair.
+    const wait = Math.max(0, Math.ceil((nextAt - now) / 1000));
+    return `checado há ${ago} s · próxima checagem em ${wait} s`;
+  }
+
+  // Minutos sem lote novo do TSE, a partir de 5; antes disso é o intervalo normal entre lotes.
+  function quietMinutes(now, sinceChange) {
+    if (sinceChange == null) return null;
+    const min = Math.floor((now - sinceChange) / 60000);
+    return min >= 5 ? min : null;
+  }
+
+  const api = {
+    parseTse, priorLula, projectUf, simulate, acceptSnapshot, delta, addFeed, sumCheck, swing, withRetry,
+    staleParts, totalIsStale, makeBatch, freshness, quietMinutes,
+  };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Model = api;
 })(this);

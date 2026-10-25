@@ -20,6 +20,7 @@
   --kin: #e9b44c; --kin-wash: rgba(233, 180, 76, 0.14);
   --beni: #ff7f9c; --beni-wash: rgba(255, 127, 156, 0.14);
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --map-edge: #0e0d0c; --map-empty: #2a2622; --map-flash: #0e0d0c; --map-flash-w: 0.8px;
   --display: "Shippori Mincho B1", "Yu Mincho", "Hiragino Mincho ProN", serif;
   --ui: "Zen Kaku Gothic New", "Yu Gothic UI", "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
@@ -36,6 +37,7 @@
     --kin: #8a5a00; --kin-wash: rgba(138, 90, 0, 0.09);
     --beni: #a3123f; --beni-wash: rgba(163, 18, 63, 0.08);
     --shadow-pop: 0 8px 24px rgba(27, 25, 22, 0.14);
+    --map-edge: #8a8174; --map-empty: #ebe4d6; --map-flash: #8a5a00; --map-flash-w: 2.5px;
     color-scheme: light;
   }
 }
@@ -48,6 +50,7 @@
   --kin: #8a5a00; --kin-wash: rgba(138, 90, 0, 0.09);
   --beni: #a3123f; --beni-wash: rgba(163, 18, 63, 0.08);
   --shadow-pop: 0 8px 24px rgba(27, 25, 22, 0.14);
+  --map-edge: #8a8174; --map-empty: #ebe4d6; --map-flash: #8a5a00; --map-flash-w: 2.5px;
   color-scheme: light;
 }
 
@@ -118,16 +121,16 @@ button { font: inherit; color: inherit; }
 
 #map { width: 100%; height: auto; display: block; max-width: 100%; }
 #map { min-height: 240px; }
-#map path { stroke: var(--ground); stroke-width: 0.8px; vector-effect: non-scaling-stroke; stroke-linejoin: round; cursor: pointer; transition: fill 0.6s ease; }
+#map path { stroke: var(--map-edge); stroke-width: 0.8px; vector-effect: non-scaling-stroke; stroke-linejoin: round; cursor: pointer; transition: fill 0.6s ease; }
 #map[data-kind="city"] path { stroke-width: 0.3px; }
 #map path:hover { stroke: var(--ink-muted); stroke-width: 1.2px; }
 #map path.sel { stroke: var(--ink); stroke-width: 2px; }
 #map path.flash { animation: flash 1.6s ease-out; }
-@keyframes flash { 0%, 30% { stroke: var(--kin); stroke-width: 2.5px; } 100% { stroke: var(--ground); } }
+@keyframes flash { 0%, 30% { stroke: var(--map-flash); stroke-width: var(--map-flash-w); } 100% { stroke: var(--map-edge); } }
 #map text { font: 700 0.95px var(--ui); fill: var(--ink); pointer-events: none; paint-order: stroke; stroke: var(--surface); stroke-width: 0.22; }
 .legend { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .legend .ramp { flex: 1 1 160px; height: 8px; border-radius: var(--r-sm);
-  background: linear-gradient(90deg, var(--ai), var(--surface-raised) 50%, var(--shu)); }
+  background: linear-gradient(90deg, var(--ai), var(--map-empty) 50%, var(--shu)); }
 .zz { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .zz button { background: var(--surface-raised); border: 1px solid var(--line-strong); border-radius: var(--r-md); padding: 4px 10px; cursor: pointer; }
 
@@ -180,11 +183,15 @@ td .sbar { min-width: 120px; }
 .spark { display: flex; align-items: flex-end; gap: 2px; height: 38px; border-bottom: 1px solid var(--line-strong); }
 .spark span { flex: 1; max-width: 8px; background: var(--ai); display: flex; flex-direction: column-reverse; border-radius: 1px 1px 0 0; }
 .spark i { display: block; background: var(--shu); }
-#feed { list-style: none; margin: 0; padding: 0; max-height: 252px; overflow-y: auto; display: grid; align-content: start; }
-#feed li { display: grid; grid-template-columns: 44px 30px 96px minmax(40px, 1fr) 118px 112px; gap: 10px; align-items: center;
-  padding: 5px 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
-#feed li.empty { display: block; border: 0; }
-#feed li.new { animation: slidein 0.7s cubic-bezier(.2,.7,.2,1); }
+#feed { list-style: none; margin: 0; padding: 0; max-height: 340px; overflow-y: auto; display: grid; align-content: start; gap: 8px; }
+#feed > li.batch { border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 10px; display: grid; gap: 4px; }
+#feed > li.empty { border: 0; }
+#feed > li.new { animation: slidein 0.7s cubic-bezier(.2,.7,.2,1); }
+#feed .bh { display: grid; grid-template-columns: 44px auto minmax(0, 1fr) minmax(40px, 120px) 118px; gap: 10px; align-items: center; font-size: 13px; }
+#feed ul { list-style: none; margin: 0; padding: 0; display: grid; }
+#feed ul li { display: grid; grid-template-columns: 30px 96px minmax(40px, 1fr) 118px 112px; gap: 10px; align-items: center;
+  padding: 3px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.head-right { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 @keyframes slidein { from { transform: translateY(-8px); opacity: 0; background: var(--kin-wash); } to { transform: none; opacity: 1; } }
 #feed .t, #feed .dp { color: var(--ink-muted); font-size: 12px; }
 #feed .v { text-align: right; }
@@ -210,8 +217,9 @@ tbody tr.upd td { animation: rowflash 1.6s ease-out; }
 }
 @media (max-width: 720px) {
   .feed-grid { grid-template-columns: minmax(0, 1fr); }
-  #feed li { grid-template-columns: 40px 28px minmax(0, 1fr) 100px; }
-  #feed li .mini, #feed li .dp { display: none; }
+  #feed .bh { grid-template-columns: 40px auto minmax(0, 1fr) 100px; }
+  #feed ul li { grid-template-columns: 28px minmax(0, 1fr) 100px; }
+  #feed .mini, #feed .dp, #feed .bh .caption { display: none; }
 }
 
 footer { color: var(--ink-muted); font-size: 12px; line-height: 18px; border-top: 1px solid var(--line); padding-top: 16px; }
@@ -266,7 +274,9 @@ footer a { color: var(--ai); }
   </section>
 
   <section class="panel" aria-label="Entrada de votos">
-    <div class="panel-head"><h2>Entrada de votos</h2><span id="seal" class="chip stale">conferindo</span></div>
+    <div class="panel-head"><h2>Entrada de votos</h2>
+      <div class="head-right"><span id="fresh" class="caption mono">checando agora</span><span id="seal" class="chip stale">conferindo</span></div>
+    </div>
     <div class="feed-grid">
       <div class="rate">
         <span class="label">Válidos por minuto</span>
