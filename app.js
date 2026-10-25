@@ -15,12 +15,15 @@
     SC: "Santa Catarina", SP: "São Paulo", SE: "Sergipe", TO: "Tocantins", ZZ: "Exterior", BR: "Brasil",
   };
   const UFS = Object.keys(NAMES).filter((u) => u !== "BR"); // 27 UFs + exterior
-  const { h22, h18, shapes } = window.STATIC;
+  const { h22, h18, shapes, regions } = window.STATIC;
+  // Regiões usam a chave "reg:<código>": o Sudeste do IBGE ("SE") tem a mesma sigla de Sergipe.
+  const REG_NAMES = { N: "Norte", NE: "Nordeste", CO: "Centro-Oeste", SE: "Sudeste", S: "Sul" };
+  const isReg = (k) => k.startsWith("reg:");
   const M = window.Model;
 
   const S = {
     t1: {}, live: {}, proj: {}, nat: null,
-    sel: "BR", view: "BR", selCity: null, mode: "live", ref: "t1",
+    sel: "BR", view: "BR", selCity: null, mode: "live", ref: "t1", level: "uf",
     ok: null, lastOk: null, brIdg: null, lastCheck: null, nextAt: null, sinceChange: Date.now(), syncing: null,
     hist: [], feed: [], batches: [], flash: new Set(), flashNew: new Set(),
     mun: null, geo: {}, city1: {}, city: {}, cityAt: {}, cityLoad: null, cityBusy: null,
@@ -82,11 +85,40 @@
     return h ? h.t2.lula / (h.t2.lula + h.t2.bolsonaro) : null;
   };
   const two = (x) => x && x.lula + x.flavio > 0 ? x.lula / (x.lula + x.flavio) : null;
-  const refShare = (uf) => S.ref === "h22" ? lean22(uf) : two(S.t1[uf]);
+  const placeName = (k) => isReg(k) ? REG_NAMES[k.slice(4)] : NAMES[k];
+  function sumH(table, ufs, keys) {
+    const t2 = Object.fromEntries(keys.map((k) => [k, 0]));
+    const have = ufs.filter((u) => table[u]);
+    have.forEach((u) => keys.forEach((k) => { t2[k] += table[u].t2[k]; }));
+    return have.length ? { t2 } : null;
+  }
+  function sumProj(ps) {
+    if (!ps.length) return null;
+    const lula = ps.reduce((s, p) => s + p.lula, 0), flavio = ps.reduce((s, p) => s + p.flavio, 0);
+    return { lula, flavio, remaining: ps.reduce((s, p) => s + p.remaining, 0), share: lula / (lula + flavio) };
+  }
+  // Tudo o que o painel mostra de um lugar: um estado ("SP"), uma região ("reg:NE"), o exterior ou o Brasil.
+  function placeData(k) {
+    if (k === "BR") {
+      return { live: S.live.BR, t1: S.t1.BR, proj: sumProj(Object.values(S.proj)), h22: sumH22(), h18: sumH18() };
+    }
+    if (isReg(k)) {
+      const ufs = M.REGIONS[k.slice(4)];
+      return {
+        live: M.sumRegion(S.live, ufs), t1: M.sumRegion(S.t1, ufs), proj: sumProj(ufs.map((u) => S.proj[u]).filter(Boolean)),
+        h22: sumH(h22, ufs, ["lula", "bolsonaro"]), h18: sumH(h18, ufs, ["haddad", "bolsonaro"]),
+      };
+    }
+    return { live: S.live[k], t1: S.t1[k], proj: S.proj[k], h22: h22[k], h18: h18[k] };
+  }
+  const h22Share = (h) => h ? h.t2.lula / (h.t2.lula + h.t2.bolsonaro) : null;
+  const refShare = (k) => S.ref === "h22" ? h22Share(placeData(k).h22) : two(placeData(k).t1);
   const REF_NAME = { t1: "1º turno 2026", h22: "2º turno 2022" };
-  const swingUf = (uf) => uf === "BR"
-    ? M.swing(S.live.BR, S.nat ? { share: S.nat.mean } : null, refShare("BR"))
-    : M.swing(S.live[uf], S.proj[uf], refShare(uf));
+  const swingUf = (k) => {
+    if (k === "BR") return M.swing(S.live.BR, S.nat ? { share: S.nat.mean } : null, refShare("BR"));
+    const d = placeData(k);
+    return M.swing(d.live, d.proj, refShare(k));
+  };
 
   // ---- Simulação (#simulacao): apuração fictícia a partir do 1º turno. Imita o TSE de verdade: o total do
   //      Brasil sai sempre em dia, mas cada estado pode vir repetido ou numa versão antiga da CDN ----
@@ -369,6 +401,23 @@
     paintMap();
   }
 
+  function drawRegionMap() {
+    const svg = $("map");
+    const box = [Infinity, Infinity, -Infinity, -Infinity];
+    let paths = "", labels = "";
+    for (const [code, rings] of Object.entries(regions)) {
+      paths += `<path data-uf="reg:${code}" d="${ringsToPath(rings, box)}"><title>${REG_NAMES[code]}</title></path>`;
+      const big = rings.reduce((a, b) => (b.length > a.length ? b : a));
+      const cx = big.reduce((s, p) => s + xy(p)[0], 0) / big.length, cy = big.reduce((s, p) => s + xy(p)[1], 0) / big.length;
+      labels += `<text class="reg" x="${cx.toFixed(2)}" y="${cy.toFixed(2)}" text-anchor="middle">${REG_NAMES[code]}</text>`;
+    }
+    svg.dataset.kind = "reg";
+    svg.innerHTML = paths + labels;
+    setViewBox(svg, box, 0.6);
+    paintMap();
+  }
+  const drawMainMap = () => (S.level === "reg" ? drawRegionMap() : drawStateMap());
+
   function drawCityMap(uf, features) {
     const svg = $("map");
     const box = [Infinity, Infinity, -Infinity, -Infinity];
@@ -397,12 +446,13 @@
     return `color-mix(in oklab, ${sw >= 0 ? "var(--shu)" : "var(--ai)"} ${Math.round(15 + 85 * k)}%, var(--map-empty))`;
   };
 
-  function ufShare(uf, mode) {
-    if (mode === "live") return S.live[uf]?.validos > 0 ? two(S.live[uf]) : null;
-    if (mode === "proj") return S.proj[uf]?.share ?? null;
-    if (mode === "t1") return two(S.t1[uf]);
-    if (mode === "h22") return lean22(uf);
-    if (mode === "h18") { const h = h18[uf]; return h ? h.t2.haddad / (h.t2.haddad + h.t2.bolsonaro) : null; }
+  function ufShare(k, mode) {
+    const d = placeData(k);
+    if (mode === "live") return d.live?.validos > 0 ? two(d.live) : null;
+    if (mode === "proj") return d.proj?.share ?? null;
+    if (mode === "t1") return two(d.t1);
+    if (mode === "h22") return h22Share(d.h22);
+    if (mode === "h18") { const h = d.h18; return h ? h.t2.haddad / (h.t2.haddad + h.t2.bolsonaro) : null; }
     return null;
   }
   // Nas cidades não há projeção nem dados de 2018/2022: a variação usa o apurado contra o 1º turno local.
@@ -446,6 +496,7 @@
       b.setAttribute("aria-pressed", String(b.dataset.mode === S.mode));
     });
     $("back").hidden = !city;
+    document.querySelectorAll("#levels button").forEach((b) => b.setAttribute("aria-pressed", String(!city && b.dataset.level === S.level)));
     $("city-search").hidden = !city;
     $("zz-row").hidden = city;
     const sw = S.mode === "swing";
@@ -657,16 +708,8 @@
   function renderDetail() {
     if (S.view !== "BR" && S.selCity) return renderCityDetail();
     const uf = S.sel;
-    $("d-title").textContent = NAMES[uf];
-    const live = S.live[uf], t1 = S.t1[uf];
-    let proj = S.proj[uf];
-    if (uf === "BR") {
-      const ps = Object.values(S.proj);
-      if (ps.length) proj = { lula: ps.reduce((s, p) => s + p.lula, 0), flavio: ps.reduce((s, p) => s + p.flavio, 0),
-        remaining: ps.reduce((s, p) => s + p.remaining, 0) };
-    }
-    const h2 = uf === "BR" ? sumH22() : h22[uf];
-    const h1 = uf === "BR" ? sumH18() : h18[uf];
+    $("d-title").textContent = placeName(uf);
+    const { live, t1, proj, h22: h2, h18: h1 } = placeData(uf);
     $("d-sub").textContent = t1 ? `${int(live?.eleitores ?? t1.eleitores)} eleitores` : "";
     let html = "";
     if (live) html += row("Apurado agora", `${pct(live.p, 1)} das seções`, live.lula, 0, live.flavio, "Lula", "Flávio");
@@ -714,8 +757,8 @@
   function enterState(uf) {
     S.sel = uf;
     S.selCity = null;
-    if (uf === "BR" || uf === "ZZ") {
-      if (S.view !== "BR") { S.view = "BR"; cityRun++; S.cityLoad = null; S.cityBusy = null; drawStateMap(); }
+    if (uf === "BR" || uf === "ZZ" || isReg(uf)) {
+      if (S.view !== "BR") { S.view = "BR"; cityRun++; S.cityLoad = null; S.cityBusy = null; drawMainMap(); }
       render();
       return;
     }
@@ -741,6 +784,14 @@
     if (!p) return;
     if (p.dataset.uf) enterState(p.dataset.uf);
     else if (p.dataset.cd) selectCity(p.dataset.cd);
+  });
+  $("levels").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    S.level = b.dataset.level;
+    if (S.view !== "BR") { S.view = "BR"; S.selCity = null; cityRun++; S.cityLoad = null; S.cityBusy = null; }
+    drawMainMap();
+    render();
   });
   $("modes").addEventListener("click", (e) => {
     const b = e.target.closest("button");
@@ -777,7 +828,7 @@
     // A simulação recomeça do zero a cada carga; o histórico real sobrevive a um recarregar.
     const saved = SIM ? null : store.get(KEY);
     if (saved) { S.hist = saved.hist || []; S.feed = saved.feed || []; S.batches = saved.batches || []; }
-    drawStateMap();
+    drawMainMap();
     render();
     while (!(await loadT1())) {
       $("chip").className = "chip err";

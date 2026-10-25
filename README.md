@@ -31,7 +31,8 @@ de propósito arquivos repetidos e antigos, para mostrar a proteção contra vot
 
 - Placar, projeção com chance de vitória e evolução da noite.
 - Entrada de votos: cada lote novo do TSE, por estado, com votos válidos por minuto e a conferência da soma dos estados.
-- Mapa por estado (apurado, projeção, variação, 1º turno, 2022, 2018). Clique num estado para ver as cidades.
+- Placar com as fotos oficiais dos candidatos, servidas pelo próprio TSE.
+- Mapa por região ou por estado (apurado, projeção, variação, 1º turno, 2022, 2018). Clique num estado para ver as cidades.
 - Variação: para que lado cada estado ou cidade foi, contra o 1º turno 2026 ou o 2º turno 2022.
 
 Abrir um estado grande pela primeira vez leva cerca de 1 a 2 minutos (São Paulo tem 645 cidades e o TSE limita
@@ -42,5 +43,5 @@ quantos arquivos se baixa por vez). Depois disso o 1º turno fica guardado no na
 - `index.html`: layout e estilo.
 - `app.js`: busca no TSE (Brasil a cada 15 s; estados e cidades quando mudam), feed, mapa, gráficos e tabela.
 - `model.js`: projeção, aceitação de lotes, variação e novas tentativas (funções puras). Testes: `node --test test/model.test.js`.
-- `data.js`: resultados de 2018/2022 por UF e o contorno dos estados (o das cidades vem do IBGE na hora).
+- `data.js`: resultados de 2018/2022 por UF e o contorno dos estados e das regiões (o das cidades vem do IBGE na hora).
 - `docs/`: design e plano.

@@ -174,7 +174,27 @@
     return min >= 5 ? min : null;
   }
 
+  // Macrorregiões do IBGE.
+  const REGIONS = {
+    N: ["AC", "AM", "AP", "PA", "RO", "RR", "TO"],
+    NE: ["AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"],
+    CO: ["DF", "GO", "MS", "MT"],
+    SE: ["ES", "MG", "RJ", "SP"],
+    S: ["PR", "RS", "SC"],
+  };
+
+  // Soma os estados de uma região que já têm dado; a fração apurada é refeita sobre as seções somadas.
+  function sumRegion(snaps, ufs) {
+    const have = ufs.map((u) => snaps[u]).filter(Boolean);
+    if (!have.length) return null;
+    const r = { lula: 0, flavio: 0, validos: 0, outros: 0, secoes: 0, secoesTot: 0, eleitores: 0 };
+    have.forEach((s) => { for (const k in r) r[k] += s[k] || 0; });
+    r.p = r.secoesTot ? r.secoes / r.secoesTot : 0;
+    return r;
+  }
+
   const api = {
+    REGIONS, sumRegion,
     parseTse, priorLula, projectUf, simulate, acceptSnapshot, delta, addFeed, sumCheck, swing, withRetry,
     staleParts, totalIsStale, makeBatch, freshness, quietMinutes,
   };

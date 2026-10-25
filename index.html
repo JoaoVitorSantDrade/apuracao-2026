@@ -92,11 +92,16 @@ button { font: inherit; color: inherit; }
 
 /* Placar */
 .score { display: grid; grid-template-columns: 1fr auto 1fr; gap: 16px 24px; align-items: end; }
-.cand { display: grid; gap: 2px; min-width: 0; }
-.cand.right { text-align: right; }
+.cand { display: flex; align-items: flex-end; gap: 16px; min-width: 0; }
+.cand.right { flex-direction: row-reverse; text-align: right; }
+.cand-text { display: grid; gap: 2px; min-width: 0; }
+/* Foto oficial do TSE (161 × 225): tamanho em que fica nítida, com as bordas sumindo no fundo. */
+.photo { width: clamp(72px, 8vw, 112px); height: auto; flex: none; background: var(--surface-raised);
+  -webkit-mask-image: radial-gradient(ellipse 58% 66% at 50% 40%, #000 48%, transparent 100%);
+  mask-image: radial-gradient(ellipse 58% 66% at 50% 40%, #000 48%, transparent 100%); }
 .cand .name { font: 700 15px/22px var(--ui); }
 .cand .party { color: var(--ink-muted); font-weight: 400; }
-.cand .pct { font: 800 clamp(44px, 7vw, 72px)/1 var(--display); font-variant-numeric: tabular-nums; }
+.cand .pct { font: 800 clamp(40px, 5vw, 68px)/1 var(--display); font-variant-numeric: tabular-nums; }
 .cand.lula .pct { color: var(--shu); }
 .cand.flavio .pct { color: var(--ai); }
 .cand .votes { font: 500 12px/16px var(--mono); color: var(--ink-muted); }
@@ -127,6 +132,7 @@ button { font: inherit; color: inherit; }
 #map path.sel { stroke: var(--ink); stroke-width: 2px; }
 #map path.flash { animation: flash 1.6s ease-out; }
 @keyframes flash { 0%, 30% { stroke: var(--map-flash); stroke-width: var(--map-flash-w); } 100% { stroke: var(--map-edge); } }
+#map text.reg { font-size: 1.5px; }
 #map text { font: 700 0.95px var(--ui); fill: var(--ink); pointer-events: none; paint-order: stroke; stroke: var(--surface); stroke-width: 0.22; }
 .legend { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .legend .ramp { flex: 1 1 160px; height: 8px; border-radius: var(--r-sm);
@@ -197,7 +203,7 @@ td .sbar { min-width: 120px; }
 #feed .v { text-align: right; }
 #feed .mini { height: 6px; background: var(--ai); border-radius: var(--r-sm); overflow: hidden; display: flex; }
 #feed .mini i { background: var(--shu); }
-#feed .s { font-size: 12px; text-align: right; }
+#feed .s { font-size: 12px; text-align: right; white-space: nowrap; }
 #feed .l, .swing.l { color: var(--shu); }
 #feed .f, .swing.f { color: var(--ai); }
 tbody tr.upd td { animation: rowflash 1.6s ease-out; }
@@ -217,7 +223,7 @@ tbody tr.upd td { animation: rowflash 1.6s ease-out; }
 }
 @media (max-width: 720px) {
   .feed-grid { grid-template-columns: minmax(0, 1fr); }
-  #feed .bh { grid-template-columns: 40px auto minmax(0, 1fr) 100px; }
+  #feed .bh { grid-template-columns: 40px minmax(0, 1fr) auto; }
   #feed ul li { grid-template-columns: 28px minmax(0, 1fr) 100px; }
   #feed .mini, #feed .dp, #feed .bh .caption { display: none; }
 }
@@ -230,6 +236,9 @@ footer a { color: var(--ai); }
 }
 @media (max-width: 560px) {
   .score { grid-template-columns: 1fr 1fr; }
+  .cand { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .cand.right { flex-direction: column; align-items: flex-end; }
+  .photo { width: 64px; }
   .mid { grid-column: 1 / -1; grid-row: 2; }
   .row { grid-template-columns: 84px minmax(0, 1fr); }
   .row .nums { grid-column: 2; text-align: left; }
@@ -256,9 +265,13 @@ footer a { color: var(--ai); }
 
   <section class="score" aria-label="Placar nacional">
     <div class="cand lula">
-      <span class="name">Lula <span class="party">PT · 13</span></span>
-      <span id="s-l" class="pct">–</span>
-      <span id="s-lv" class="votes">–</span>
+      <img class="photo" src="https://resultados.tse.jus.br/oficial/ele2026/6258/fotos/br/280002542548.jpeg" alt="Lula, foto oficial do TSE" width="161" height="225">
+      <div class="cand-text">
+        <span class="name">Lula <span class="party">PT · 13</span></span>
+        <span class="caption">vice Geraldo Alckmin (PSB)</span>
+        <span id="s-l" class="pct">–</span>
+        <span id="s-lv" class="votes">–</span>
+      </div>
     </div>
     <div class="mid">
       <span class="label">Seções apuradas</span>
@@ -266,9 +279,13 @@ footer a { color: var(--ai); }
       <span id="s-ps" class="caption mono">–</span>
     </div>
     <div class="cand flavio right">
-      <span class="name">Flávio Bolsonaro <span class="party">PL · 22</span></span>
-      <span id="s-f" class="pct">–</span>
-      <span id="s-fv" class="votes">–</span>
+      <img class="photo" src="https://resultados.tse.jus.br/oficial/ele2026/6258/fotos/br/280002551544.jpeg" alt="Flávio Bolsonaro, foto oficial do TSE" width="161" height="225">
+      <div class="cand-text">
+        <span class="name">Flávio Bolsonaro <span class="party">PL · 22</span></span>
+        <span class="caption">vice Alfredo Gaspar (PL)</span>
+        <span id="s-f" class="pct">–</span>
+        <span id="s-fv" class="votes">–</span>
+      </div>
     </div>
     <div class="bar" aria-hidden="true"><div id="b-l" class="l" style="width:0"></div><div id="b-f" class="f" style="width:0"></div><div class="half"></div></div>
   </section>
@@ -302,6 +319,10 @@ footer a { color: var(--ai); }
         </div>
       </div>
       <div class="map-tools">
+        <div class="seg" role="group" aria-label="Nível do mapa" id="levels">
+          <button type="button" data-level="reg" aria-pressed="false">Regiões</button>
+          <button type="button" data-level="uf" aria-pressed="true">Estados</button>
+        </div>
         <button type="button" id="back" class="text-btn" hidden>← Brasil</button>
         <span id="city-search" hidden>
           <label class="label" for="city-input">Cidade</label>

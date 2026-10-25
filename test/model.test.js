@@ -231,3 +231,21 @@ test("staleParts leaves the parts alone when the total is the stale one (TSE, 25
   assert.deepEqual(M.staleParts(total, parts), []);
   assert.equal(M.totalIsStale(total, parts), true);
 });
+
+// ---- Macrorregiões ----
+test("REGIONS covers the 27 federative units exactly once", () => {
+  const all = Object.values(M.REGIONS).flat();
+  assert.equal(all.length, 27);
+  assert.equal(new Set(all).size, 27);
+  assert.deepEqual(M.REGIONS.CO.slice().sort(), ["DF", "GO", "MS", "MT"]);
+});
+
+test("sumRegion adds up the states it has and recomputes the counted share", () => {
+  const snaps = {
+    SP: { lula: 10, flavio: 20, validos: 30, outros: 0, secoes: 5, secoesTot: 10, eleitores: 100 },
+    RJ: { lula: 6, flavio: 4, validos: 10, outros: 0, secoes: 5, secoesTot: 30, eleitores: 50 },
+  };
+  const r = M.sumRegion(snaps, ["SP", "RJ", "MG"]);
+  assert.deepEqual(r, { lula: 16, flavio: 24, validos: 40, outros: 0, secoes: 10, secoesTot: 40, eleitores: 150, p: 0.25 });
+  assert.equal(M.sumRegion(snaps, ["BA"]), null);
+});
