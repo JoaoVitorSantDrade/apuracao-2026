@@ -19,6 +19,12 @@
       p: secoesTot ? secoes / secoesTot : 0,
       eleitores: Number(j.e.te),
       comparecimento: Number(j.e.c),
+      // Comparecimento, abstenção, brancos e nulos valem sobre as seções já apuradas (est), como o TSE mostra.
+      est: Number(j.e.est) || 0,
+      abstencao: Number(j.e.a) || 0,
+      tv: Number(j.v.tv) || 0,
+      brancos: Number(j.v.vb) || 0,
+      nulos: Number(j.v.tvn) || 0,
       hora: `${j.dg.slice(0, 5)} ${j.hg.slice(0, 5)}`,
       idg: Number(j.idg),
       ts: `${j.dg.slice(6, 10)}-${j.dg.slice(3, 5)}-${j.dg.slice(0, 2)}T${j.hg}`,
@@ -187,7 +193,8 @@
   function sumRegion(snaps, ufs) {
     const have = ufs.map((u) => snaps[u]).filter(Boolean);
     if (!have.length) return null;
-    const r = { lula: 0, flavio: 0, validos: 0, outros: 0, secoes: 0, secoesTot: 0, eleitores: 0 };
+    const r = { lula: 0, flavio: 0, validos: 0, outros: 0, secoes: 0, secoesTot: 0, eleitores: 0,
+      est: 0, comparecimento: 0, abstencao: 0, tv: 0, brancos: 0, nulos: 0 };
     have.forEach((s) => { for (const k in r) r[k] += s[k] || 0; });
     r.p = r.secoesTot ? r.secoes / r.secoesTot : 0;
     return r;
@@ -240,8 +247,48 @@
     return [...versions, packSnap(snap).slice(0, 7)];
   }
 
+  function turnout(s) {
+    if (!s || !s.est || !s.tv) return null;
+    return { comparecimento: s.comparecimento / s.est, abstencao: s.abstencao / s.est, brancos: s.brancos / s.tv, nulos: s.nulos / s.tv };
+  }
+
+  // Quem lidera, por quanto, e quanto dos válidos que faltam (estimados) o outro precisaria para virar.
+  // "Decidido" só quando a vantagem supera todos os eleitores das seções ainda não apuradas: isso não depende do modelo.
+  function virada(live, remaining) {
+    const { lula, flavio } = live;
+    if (lula + flavio === 0) return { lider: null, diff: 0, precisa: null, decidido: false };
+    const diff = Math.abs(lula - flavio);
+    const aberto = live.est != null && live.eleitores ? live.eleitores - live.est : null;
+    return {
+      lider: lula >= flavio ? "lula" : "flavio",
+      diff,
+      precisa: remaining > 0 ? (diff + remaining) / (2 * remaining) : null,
+      decidido: aberto != null && diff > aberto,
+    };
+  }
+
+  // Lotes nacionais para os votos por minuto: uma versão do TSE entra uma vez só.
+  function addBatch(batches, b, max = 40) {
+    if (batches.some((x) => x.idg === b.idg)) return batches;
+    return [...batches, b].slice(-max);
+  }
+
+  // Tendência de um lugar ao longo da noite: [fração das seções apuradas, fatia de Lula] a cada versão nova com votos.
+  function ufSeries(entries, uf) {
+    const out = [];
+    let lastIdg = null;
+    for (const e of entries) {
+      const a = uf === "BR" ? e.br : e.ufs[uf];
+      if (!a || a[0] === lastIdg) continue;
+      lastIdg = a[0];
+      const s = unpackSnap(a);
+      if (s.lula + s.flavio > 0) out.push([s.p, s.lula / (s.lula + s.flavio)]);
+    }
+    return out;
+  }
+
   const api = {
-    REGIONS, sumRegion, packSnap, unpackSnap, historyEntry, appendEntry, feedFromHistory, addCityVersion,
+    REGIONS, sumRegion, turnout, virada, addBatch, ufSeries, packSnap, unpackSnap, historyEntry, appendEntry, feedFromHistory, addCityVersion,
     parseTse, priorLula, projectUf, simulate, acceptSnapshot, delta, addFeed, sumCheck, swing, withRetry,
     staleParts, totalIsStale, makeBatch, freshness, quietMinutes,
   };

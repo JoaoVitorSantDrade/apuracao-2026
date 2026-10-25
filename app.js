@@ -29,9 +29,9 @@
     sel: "BR", view: "BR", selCity: null, mode: "live", ref: "t1", level: "uf",
     ok: null, lastOk: null, brIdg: null, lastCheck: null, nextAt: null, sinceChange: Date.now(), syncing: null,
     hist: [], feed: [], batches: [], flash: new Set(), flashNew: new Set(),
-    mun: null, geo: {}, city1: {}, city: {}, cityHist: {}, cityAt: {}, cityLoad: null, cityBusy: null,
+    mun: null, geo: {}, city1: {}, city: {}, cityHist: {}, ufHist: {}, cityAt: {}, cityLoad: null, cityBusy: null,
   };
-  const KEY = SIM ? "apuracao26-sim" : "apuracao26-v2"; // v2: feed agrupado por lote
+  const KEY = SIM ? "apuracao26-sim" : "apuracao26-v3"; // v3: lotes com a versão do TSE (sem cópias da 1ª carga)
 
   const $ = (id) => document.getElementById(id);
   const pct = (x, d = 2) => x == null || !isFinite(x) ? "–"
@@ -177,13 +177,14 @@
     const entries = h?.entries || [];
     if (!entries.length) return;
     S.feed = M.feedFromHistory(entries, 40);
+    UFS.forEach((uf) => { S.ufHist[uf] = M.ufSeries(entries, uf); });
     S.batches = [];
     S.hist = [];
     entries.forEach((e, i) => {
       const br = M.unpackSnap(e.br);
       if (i) {
         const d = M.delta(M.unpackSnap(entries[i - 1].br), br);
-        if (d.validos > 0) S.batches.push({ ts: br.ts, hora: br.hora, validos: d.validos, lula: d.lula, flavio: d.flavio });
+        if (d.validos > 0) S.batches = M.addBatch(S.batches, { idg: br.idg, ts: br.ts, hora: br.hora, validos: d.validos, lula: d.lula, flavio: d.flavio });
       }
       if (!br.validos || S.hist[S.hist.length - 1]?.p === br.p) return;
       const list = Object.entries(e.ufs).filter(([uf]) => S.t1[uf])
@@ -192,7 +193,6 @@
       const n = M.simulate(list, { n: 400, seed: 2026 });
       S.hist.push({ p: br.p, s: br.lula / br.validos, m: n.mean, lo: n.lo, hi: n.hi, h: br.hora });
     });
-    S.batches = S.batches.slice(-40);
     // O estado atual parte da última entrada: o ao vivo segue dela, e o que o TSE publicou depois vira um lote no feed.
     const last = entries[entries.length - 1];
     S.live.BR = M.unpackSnap(last.br);
@@ -222,7 +222,12 @@
   function apply(map, key, snap) {
     const prev = map[key];
     const a = M.acceptSnapshot(prev, snap);
-    if (!a.ok) return null;
+    if (!a.ok) {
+      // A mesma versão vinda do TSE é mais completa que a do histórico (comparecimento, brancos, nulos): fica com ela,
+      // sem contar como lote novo.
+      if (a.reason === "repetido" && prev.tv == null && snap.tv != null) map[key] = snap;
+      return null;
+    }
     map[key] = snap;
     return M.delta(prev, snap);
   }
@@ -249,10 +254,11 @@
   }
 
   function applyTotal(br) {
+    const first = !S.live.BR; // a primeira carga é o ponto de partida, não um lote
     const dBr = apply(S.live, "BR", br);
     if (dBr) S.sinceChange = Date.now();
-    if (dBr && dBr.validos > 0) {
-      S.batches = [...S.batches, { ts: br.ts, hora: br.hora, validos: dBr.validos, lula: dBr.lula, flavio: dBr.flavio }].slice(-40);
+    if (dBr && dBr.validos > 0 && !first) {
+      S.batches = M.addBatch(S.batches, { idg: br.idg, ts: br.ts, hora: br.hora, validos: dBr.validos, lula: dBr.lula, flavio: dBr.flavio });
     }
   }
 
@@ -280,6 +286,7 @@
         scheduleRender();
         const take = (uf, snap) => {
           const d = apply(S.live, uf, snap);
+          if (d && snap.lula + snap.flavio > 0) (S.ufHist[uf] ??= []).push([snap.p, snap.lula / (snap.lula + snap.flavio)]);
           if (d && (d.validos > 0 || d.secoes > 0)) {
             S.flash.add(uf);
             S.flashNew.add(uf);
@@ -601,6 +608,9 @@
       $("b-l").style.width = tot ? (br.lula / tot * 100).toFixed(3) + "%" : "0";
       $("b-f").style.width = tot ? (br.flavio / tot * 100).toFixed(3) + "%" : "0";
       $("clock").textContent = `TSE · ${br.hora}`;
+      // O placar no título da aba: dá para acompanhar com a aba em segundo plano.
+      document.title = tot ? `${pct(br.lula / tot, 1)} × ${pct(br.flavio / tot, 1)} · Apuração 2026` : "Apuração 2026";
+      $("virada").innerHTML = viradaText(br, Object.values(S.proj).reduce((s, p) => s + p.remaining, 0));
     }
     const chip = $("chip");
     if (SIM) { chip.className = "chip sim"; chip.textContent = "simulação"; }
@@ -772,11 +782,39 @@
     let html = "";
     if (live) html += row("Apurado agora", `${pct(live.p, 1)} das seções`, live.lula, 0, live.flavio, "Lula", "Flávio");
     if (proj) html += row("Projeção final", `faltam ${mi(proj.remaining)}`, proj.lula, 0, proj.flavio, "Lula", "Flávio");
+    const vt = viradaText(live, proj?.remaining ?? 0);
+    if (vt) html += `<p class="virada caption">${vt}</p>`;
     html += swingRow(swingUf(uf), `vs ${REF_NAME[S.ref]}`, live && live.p >= 0.95 ? "pelo apurado" : "pela projeção");
+    html += turnoutRow(live, t1);
     if (t1) html += row("1º turno 2026", "cinza: outros", t1.lula, t1.outros, t1.flavio, "Lula", "Flávio");
     if (h2) html += row("2022 · 2º turno", "Lula × Bolsonaro", h2.t2.lula, 0, h2.t2.bolsonaro, "Lula", "Bolsonaro");
     if (h1) html += row("2018 · 2º turno", "Haddad × Bolsonaro", h1.t2.haddad, 0, h1.t2.bolsonaro, "Haddad", "Bolsonaro");
     $("d-rows").innerHTML = html || `<p class="caption">Carregando os dados do TSE…</p>`;
+  }
+
+  // Quem lidera, por quanto, e o que o outro precisa dos votos que faltam (estimados pela projeção).
+  function viradaText(live, remaining) {
+    if (!live) return "";
+    const v = M.virada(live, remaining);
+    if (!v.lider) return "";
+    const lider = v.lider === "lula" ? "Lula" : "Flávio", outro = v.lider === "lula" ? "Flávio" : "Lula";
+    if (v.decidido) {
+      return `<span class="chip ok">decidido matematicamente</span> A vantagem de ${lider} (<b>${int(v.diff)}</b> votos) ` +
+        "é maior que todos os eleitores das seções que faltam apurar.";
+    }
+    const need = v.precisa == null ? ""
+      : v.precisa > 1 ? ` · pela projeção, nem com todos os votos que faltam ${outro} viraria`
+      : ` · ${outro} precisa de <b>${pct(v.precisa, 1)}</b> dos votos válidos que faltam para virar`;
+    return `${lider} à frente por <b>${int(v.diff)}</b> votos${need}`;
+  }
+
+  // Comparecimento sobre as seções apuradas, comparado com o 1º turno, e brancos e nulos sobre o total de votos.
+  function turnoutRow(live, t1) {
+    const tt = M.turnout(live), t0 = M.turnout(t1);
+    if (!tt) return "";
+    return `<div class="row"><div class="lbl"><b>Comparecimento</b>sobre o apurado</div>` +
+      `<div class="tt mono">${pct(tt.comparecimento, 1)}${t0 ? ` <span class="caption">· 1º turno ${pct(t0.comparecimento, 1)}</span>` : ""}</div>` +
+      `<div class="nums">brancos ${pct(tt.brancos, 1)}<br>nulos ${pct(tt.nulos, 1)}</div></div>`;
   }
 
   // Lula entre os votos válidos a cada lote da cidade, no eixo das seções apuradas dela.
@@ -807,6 +845,22 @@
     $("d-rows").innerHTML = html || `<p class="caption">Carregando a cidade…</p>`;
   }
 
+  // Mini gráfico da % de Lula a cada lote do estado, no eixo das seções apuradas; a linha tracejada é 50 %.
+  // As escalas seguem o trecho que os dados ocupam, para a tendência não ficar espremida no início da noite.
+  function trend(pts) {
+    if (!pts || pts.length < 2) return "";
+    const W = 60, H = 16;
+    const p0 = pts[0][0], p1 = pts[pts.length - 1][0];
+    const ss = pts.map((x) => x[1]).concat(0.5);
+    const lo = Math.min(...ss) - 0.01, hi = Math.max(...ss) + 0.01;
+    const X = (p) => (p1 > p0 ? (p - p0) / (p1 - p0) : 0) * W, Y = (s) => H - ((s - lo) / (hi - lo)) * H;
+    const line = pts.map(([p, s]) => `${X(p).toFixed(1)},${Y(s).toFixed(1)}`).join(" ");
+    const last = pts[pts.length - 1][1];
+    return `<svg class="trend" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Lula a cada lote, de ${pct(pts[0][1], 1)} a ${pct(last, 1)}">` +
+      `<line x1="0" x2="${W}" y1="${Y(0.5).toFixed(1)}" y2="${Y(0.5).toFixed(1)}" stroke="var(--line-strong)" stroke-dasharray="2 2" vector-effect="non-scaling-stroke"/>` +
+      `<polyline points="${line}" fill="none" stroke="${last >= 0.5 ? "var(--shu)" : "var(--ai)"}" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`;
+  }
+
   function renderTable() {
     const order = UFS.slice().sort((a, b) => (S.t1[b]?.eleitores ?? 0) - (S.t1[a]?.eleitores ?? 0));
     const lead = (s, l = "Lula", f = "Flávio") => s == null ? "–"
@@ -821,13 +875,25 @@
         `<td>${l ? sbar(l.lula, 0, l.flavio) : ""}</td>` +
         `<td class="r mono">${tot ? pct(l.lula / tot, 1) : "–"}</td>` +
         `<td class="r mono">${tot ? pct(l.flavio / tot, 1) : "–"}</td>` +
+        `<td>${trend(S.ufHist[uf])}</td>` +
         `<td class="r">${lead(S.proj[uf]?.share)}</td>` +
         `<td class="r">${swingTag(swingUf(uf))}</td></tr>`;
     }).join("");
   }
 
   // ---- Navegação ----
+  // Links diretos: #SP abre São Paulo, #regiao-NE o Nordeste; o endereço acompanha a seleção.
+  const placeToHash = (k) => (k === "BR" ? "" : isReg(k) ? `regiao-${k.slice(4)}` : k);
+  function hashToPlace(h) {
+    h = decodeURIComponent(h.replace(/^#/, ""));
+    if (/^regiao-(N|NE|CO|SE|S)$/.test(h)) return `reg:${h.slice(7)}`;
+    return NAMES[h.toUpperCase()] ? h.toUpperCase() : null;
+  }
   function enterState(uf) {
+    if (!SIM) {
+      const h = placeToHash(uf);
+      history.replaceState(null, "", h ? `#${h}` : location.pathname + location.search);
+    }
     S.sel = uf;
     S.selCity = null;
     if (uf === "BR" || uf === "ZZ" || isReg(uf)) {
@@ -888,6 +954,22 @@
     const m = (S.mun?.[S.view] || []).find((x) => x.nm.toLowerCase() === e.target.value.trim().toLowerCase());
     if (m) selectCity(m.cd);
   });
+  $("share").addEventListener("click", async () => {
+    const b = $("share");
+    try {
+      await navigator.clipboard.writeText(location.href);
+      b.textContent = "Link copiado";
+    } catch {
+      b.textContent = "Copie da barra de endereço";
+    }
+    setTimeout(() => { b.textContent = "Copiar link"; }, 2500);
+  });
+  // Esc volta um nível: da cidade para o estado, do estado (ou região) para o Brasil.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || (e.target instanceof Element && e.target.closest("input"))) return;
+    if (S.view !== "BR" && S.selCity) selectCity(null);
+    else if (S.sel !== "BR") enterState("BR");
+  });
   $("theme").addEventListener("click", () => {
     const dark = getComputedStyle(document.documentElement).colorScheme.includes("dark");
     const next = dark ? "light" : "dark";
@@ -909,6 +991,11 @@
       await new Promise((r) => setTimeout(r, 10000));
     }
     await loadHistory();
+    const linked = SIM ? null : hashToPlace(location.hash);
+    if (linked) {
+      if (isReg(linked)) { S.level = "reg"; drawMainMap(); }
+      enterState(linked);
+    }
     await tick(); // cada ciclo agenda o seguinte, então nunca se sobrepõem
     setInterval(renderFresh, 1000);
   }

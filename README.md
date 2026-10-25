@@ -52,6 +52,9 @@ de propósito arquivos repetidos e antigos, para mostrar a proteção contra vot
 - Placar com as fotos oficiais dos candidatos, servidas pelo próprio TSE.
 - Mapa por região ou por estado (apurado, projeção, variação, 1º turno, 2022, 2018). Clique num estado para ver as cidades.
 - Variação: para que lado cada estado ou cidade foi, contra o 1º turno 2026 ou o 2º turno 2022.
+- Quanto falta para virar (e "decidido matematicamente" quando a vantagem supera todos os eleitores das seções que
+  faltam), comparecimento, brancos e nulos.
+- Links diretos: `#SP` abre São Paulo, `#regiao-NE` o Nordeste; "Copiar link" no detalhe; Esc volta um nível.
 
 Abrir um estado grande pela primeira vez leva cerca de 1 a 2 minutos (São Paulo tem 645 cidades e o TSE limita
 quantos arquivos se baixa por vez). Depois disso o 1º turno fica guardado no navegador.

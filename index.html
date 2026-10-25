@@ -210,6 +210,11 @@ tbody tr.upd td { animation: rowflash 1.6s ease-out; }
 @keyframes rowflash { from { background: var(--kin-wash); } to { background: transparent; } }
 .swing { font: 500 12px/16px var(--mono); white-space: nowrap; color: var(--ink-muted); }
 .tl { width: 100%; height: 24px; display: block; }
+.trend { width: 60px; height: 16px; display: block; }
+.virada { grid-column: 1 / -1; margin: 0; font-size: 13px; line-height: 20px; }
+.virada b { color: var(--ink); font-family: var(--mono); font-weight: 500; }
+.virada .chip { margin-right: 6px; }
+.tt { font-size: 13px; }
 .swing-meter { position: relative; height: 10px; background: linear-gradient(90deg, var(--shu-wash), var(--surface-raised) 50%, var(--ai-wash)); border-radius: var(--r-sm); }
 .swing-meter .mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line-strong); }
 .swing-meter .mark { position: absolute; top: -3px; width: 4px; height: 16px; margin-left: -2px; border-radius: 1px; transition: left 0.9s cubic-bezier(.2,.7,.2,1); }
@@ -289,6 +294,7 @@ footer a { color: var(--ai); }
       </div>
     </div>
     <div class="bar" aria-hidden="true"><div id="b-l" class="l" style="width:0"></div><div id="b-f" class="f" style="width:0"></div><div class="half"></div></div>
+    <p id="virada" class="virada caption" aria-live="polite"></p>
   </section>
 
   <section class="panel" aria-label="Entrada de votos">
@@ -369,7 +375,7 @@ footer a { color: var(--ai); }
       </section>
 
       <section class="panel" aria-label="Detalhe">
-        <div class="panel-head"><h2 id="d-title">Brasil</h2><span id="d-sub" class="label"></span></div>
+        <div class="panel-head"><h2 id="d-title">Brasil</h2><span class="head-right"><span id="d-sub" class="label"></span><button type="button" id="share" class="text-btn">Copiar link</button></span></div>
         <div id="d-rows" class="rows"></div>
       </section>
     </div>
@@ -379,7 +385,7 @@ footer a { color: var(--ai); }
     <div class="panel-head"><h2>Estados</h2><span class="caption">Ordem: eleitorado. Clique para abrir as cidades do estado.</span></div>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th class="label">UF</th><th class="label r">Apurado</th><th class="label">Lula × Flávio agora</th><th class="label r">Lula</th><th class="label r">Flávio</th><th class="label r">Projeção</th><th class="label r" id="th-ref">Variação</th></tr></thead>
+        <thead><tr><th class="label">UF</th><th class="label r">Apurado</th><th class="label">Lula × Flávio agora</th><th class="label r">Lula</th><th class="label r">Flávio</th><th class="label">Noite</th><th class="label r">Projeção</th><th class="label r" id="th-ref">Variação</th></tr></thead>
         <tbody id="tbody"></tbody>
       </table>
     </div>

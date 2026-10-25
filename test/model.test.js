@@ -246,7 +246,8 @@ test("sumRegion adds up the states it has and recomputes the counted share", () 
     RJ: { lula: 6, flavio: 4, validos: 10, outros: 0, secoes: 5, secoesTot: 30, eleitores: 50 },
   };
   const r = M.sumRegion(snaps, ["SP", "RJ", "MG"]);
-  assert.deepEqual(r, { lula: 16, flavio: 24, validos: 40, outros: 0, secoes: 10, secoesTot: 40, eleitores: 150, p: 0.25 });
+  assert.deepEqual(r, { lula: 16, flavio: 24, validos: 40, outros: 0, secoes: 10, secoesTot: 40, eleitores: 150,
+    est: 0, comparecimento: 0, abstencao: 0, tv: 0, brancos: 0, nulos: 0, p: 0.25 });
   assert.equal(M.sumRegion(snaps, ["BA"]), null);
 });
 
@@ -299,4 +300,56 @@ test("addCityVersion keeps each accepted city version once", () => {
   v = M.addCityVersion(v, sn(3, "2026-10-25T19:06:00", 5, 4, 2)); // contagem menor
   assert.deepEqual(v.map((x) => x[0]), [1, 2]);
   assert.deepEqual(v[1], [2, "2026-10-25T19:05:00", 6, 4, 10, 2, 100]);
+});
+
+// ---- Virada, comparecimento ----
+test("parseTse reads turnout, blank and null votes (SP, 1st round)", () => {
+  const r = M.parseTse(fixture("sp-1t.json"));
+  assert.deepEqual([r.est, r.comparecimento, r.abstencao, r.tv, r.brancos, r.nulos],
+    [34122892, 26431992, 7690900, 26431992, 632801, 916243]);
+});
+
+test("turnout gives the shares over the counted sections, or null before any", () => {
+  const t = M.turnout({ est: 1000, comparecimento: 800, abstencao: 200, tv: 800, brancos: 16, nulos: 24 });
+  assert.deepEqual(t, { comparecimento: 0.8, abstencao: 0.2, brancos: 0.02, nulos: 0.03 });
+  assert.equal(M.turnout({ est: 0, comparecimento: 0, abstencao: 0, tv: 0, brancos: 0, nulos: 0 }), null);
+});
+
+test("virada says who leads and what share of the remaining votes the other needs", () => {
+  // Lula 60, Flávio 40; faltam 50 válidos: Flávio precisa de (20 + 50) / 100 = 70 % deles.
+  const v = M.virada({ lula: 60, flavio: 40, eleitores: 1000, est: 500 }, 50);
+  assert.deepEqual([v.lider, v.diff, v.decidido], ["lula", 20, false]);
+  assert.ok(Math.abs(v.precisa - 0.7) < 1e-12);
+});
+
+test("virada is decided only when the lead beats every voter in the sections still uncounted", () => {
+  assert.equal(M.virada({ lula: 900, flavio: 100, eleitores: 1500, est: 1000 }, 300).decidido, true); // 800 > 500
+  assert.equal(M.virada({ lula: 900, flavio: 100, eleitores: 2000, est: 1000 }, 300).decidido, false); // 800 < 1000
+  assert.equal(M.virada({ lula: 900, flavio: 100, eleitores: 1500 }, 300).decidido, false); // sem est: não afirma
+});
+
+test("virada with nothing counted has no leader", () => {
+  assert.equal(M.virada({ lula: 0, flavio: 0, eleitores: 10, est: 0 }, 5).lider, null);
+});
+
+test("addBatch ignores a national version it already has and keeps the last 40", () => {
+  let b = M.addBatch([], { idg: 1, validos: 10 });
+  b = M.addBatch(b, { idg: 1, validos: 10 }); // a mesma versão de novo (ex.: página recarregada)
+  b = M.addBatch(b, { idg: 2, validos: 5 });
+  assert.deepEqual(b.map((x) => x.idg), [1, 2]);
+  for (let i = 3; i < 50; i++) b = M.addBatch(b, { idg: i, validos: 1 });
+  assert.equal(b.length, 40);
+  assert.equal(b[b.length - 1].idg, 49);
+});
+
+test("ufSeries gives one point per new version of a place across the night", () => {
+  const e = (idg, sp) => ({ idg, br: [idg, "2026-10-25T19:00:00", 1, 1, 2, 1, 10, 0], ufs: { SP: sp } });
+  const entries = [
+    e(1, [1, "2026-10-25T19:00:00", 0, 0, 0, 0, 100, 0]), // ainda sem votos: não entra
+    e(2, [2, "2026-10-25T19:02:00", 30, 70, 100, 10, 100, 0]),
+    e(3, [2, "2026-10-25T19:02:00", 30, 70, 100, 10, 100, 0]), // mesma versão de SP
+    e(4, [4, "2026-10-25T19:06:00", 90, 110, 200, 25, 100, 0]),
+  ];
+  assert.deepEqual(M.ufSeries(entries, "SP"), [[0.1, 0.3], [0.25, 0.45]]);
+  assert.deepEqual(M.ufSeries(entries, "RJ"), []);
 });
